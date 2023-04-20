@@ -1,0 +1,11 @@
+import Data.List (sort)
+
+main :: IO ()
+main = loop []
+
+loop :: [String]
+loop a = do
+  new <- getLine
+  if null new then do
+    putStrLn $ sort a
+  else loop (a + [new])

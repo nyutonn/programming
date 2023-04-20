@@ -1,0 +1,12 @@
+main :: IO ()
+main = loop
+
+loop :: Integer -> IO ()
+loop n = do
+  new <- getLine
+  if null new then
+    return n
+  else do
+    n += new
+    loop new
+  

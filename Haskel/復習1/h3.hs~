@@ -1,0 +1,10 @@
+main :: IO ()
+main = do
+  putStrLn "Your name?"
+  name <- getLine
+  if name == "Mario" then do
+    putStrLn "Wow!!"
+    putStrLn $ "Hello " ++ name ++ "!"
+  else
+    putStrLn $ "Hello " ++ name ++ "."
+    

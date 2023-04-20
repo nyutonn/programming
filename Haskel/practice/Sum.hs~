@@ -1,0 +1,10 @@
+main :: IO ()
+main = loop 0
+
+loop :: Integer -> IO ()
+loop n = do
+  s <- getLine
+  if null s then do
+    putStrLn "Total : "
+    putStrLn n
+  else loop (n + read s)

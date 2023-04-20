@@ -1,0 +1,397 @@
+{-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
+{-# LANGUAGE GADTs #-}
+
+-- Tetris
+module Main where
+
+import qualified Data.Map as M
+import Data.Map ((!))
+import Control.Applicative
+
+import Graphics.Gloss
+import Graphics.Gloss.Interface.Pure.Game
+
+import System.Random
+
+import Debug.Trace
+
+-- 座標: (0,0)は左下角で、(100,100)は右上角だ
+
+-- --------------------
+-- ミノが落る箱
+type BoxPos  = Int
+type BoxPoint = (BoxPos,BoxPos)
+type Box  = M.Map BoxPoint Color
+emptyColor = white      -- 空間の色
+
+-- rightEdge - leftEdge + 1  : 幅
+-- topEdge  - bottomEdge + 1: 高さ
+leftEdge   = 0 ::BoxPos
+rightEdge  = 9 ::BoxPos
+bottomEdge = 0 ::BoxPos
+topEdge    = 19::BoxPos
+
+boxLine = [leftEdge .. rightEdge]
+
+boxWidthWorld :: Float
+boxWidthWorld = 5.0  -- 世界の座標に
+boxWH  = boxWidthWorld/2
+
+boxToWorld :: BoxPoint -> Point
+boxToWorld (i,j) =
+  (fromIntegral i*boxWidthWorld-50,
+  fromIntegral j*boxWidthWorld+boxWH)
+
+boxToWorldRel :: BoxPoint -> Point
+boxToWorldRel (i,j) =
+  (fromIntegral i*boxWidthWorld,
+  fromIntegral j*boxWidthWorld)
+
+
+-- 空箱
+emptyBox :: Box
+emptyBox = M.fromList
+          [((i,j),emptyColor) |
+              i <- boxLine,
+              j <- [bottomEdge..topEdge] ]
+
+-- Pointをたす
+point_add :: BoxPoint -> BoxPoint -> BoxPoint
+point_add (i1,j1) (i2,j2) = (i1+i2,j1+j2)
+
+-- 回転させる
+spinCCW :: BoxPoint -> BoxPoint
+spinCCW (x,y) = (-y,x)
+
+spinCW :: BoxPoint -> BoxPoint
+spinCW (x,y) = (y,-x)
+
+rotateCWprim :: Mino -> Mino
+rotateCWprim mino@Mino{..} =
+  mino { mshape = map spinCW mshape }
+
+rotateCCWprim :: Mino -> Mino
+rotateCCWprim mino@Mino{..} =
+  mino { mshape = map spinCCW mshape }
+
+adjustMinoPos :: Mino -> Mino
+adjustMinoPos mino@Mino{..} =
+  let minX = minimum $ map fst mshape
+      minY = minimum $ map snd mshape
+  in mino { mshape = map (point_add (-minX,-minY)) mshape }
+
+rotateCW :: Mino -> Mino
+rotateCW = adjustMinoPos . rotateCWprim
+
+rotateCCW :: Mino -> Mino
+rotateCCW = adjustMinoPos . rotateCCWprim
+
+-- Pointは箱以内にあるか
+okPoint :: BoxPoint -> Bool
+okPoint (i,j) = and [
+  i>=leftEdge, i<=rightEdge, j>=bottomEdge, j<=topEdge]
+
+-- BoxPointを足す 境界以内に強制
+point_add_clap :: BoxPoint -> BoxPoint -> BoxPoint
+point_add_clap (i1,j1) (i2,j2) =
+  (clap leftEdge rightEdge (i1+i2), clap bottomEdge topEdge (j1+j2))
+ where
+  clap mn mx n
+    | n < mn = mn
+    | n > mx = mx
+    | otherwise = n
+
+
+-- 最低点でなければ、すぐ低い点と返す
+lowerPt :: BoxPoint -> BoxPoint
+lowerPt (i,j) = (i,j-1)
+
+                                         
+-- 空部分のない行を見付ける
+-- XXX 自分で書いて
+findFullLine :: Box -> Maybe BoxPos -- [BoxPos]
+findFullLine box = foldr (\x y -> Just x) Nothing
+                   [j | j <- [bottomEdge..topEdge]
+                       , all(\i -> box ! (i,j) /= emptyColor) boxLine]
+  
+-- 一杯行を消す
+collapseLine :: BoxPos -> Box -> Box
+collapseLine fullLine box=
+  foldr (\(i,j) b ->
+          if j == topEdge then
+            M.insert (i,j) emptyColor b 
+          else if j >= fullLine then 
+                 M.insert (i,j) (box ! (i,j+1)) b
+               else
+                 M.insert (i,j) (box ! (i,j)) b) M.empty $
+  [ (i,j) | i <- boxLine, j <- [bottomEdge..topEdge] ]
+
+-- --------------------
+-- ミノ
+
+data Mino = Mino{
+  mcolor  :: Color,
+  -- ミノの形: 部分の位置
+  -- 先頭の要素は(i,0)に位置した一番下の部分を指す
+  -- 他の要素の座標: (i,j), j >= 0
+  mshape :: [BoxPoint]
+  }
+
+minos :: [Mino]
+minos = [
+  -- O
+  Mino{ mcolor = red,
+        mshape = [(0,0),(0,1),(1,0),(1,1)]},
+  -- L
+  Mino{ mcolor = blue,
+        mshape = [(0,0),(0,1),(1,0),(0,2)]},
+  -- J
+  Mino{ mcolor = green,
+        mshape = [(0,0),(0,1),(1,0),(2,0)]},
+  -- S
+  Mino{ mcolor = magenta,
+        mshape = [(0,0),(1,0),(1,1),(2,1)]},
+  -- Z
+  Mino{ mcolor = orange,
+        mshape = [(0,0),(0,1),(1,1),(1,2)]},
+  -- I
+  Mino{ mcolor = cyan,
+        mshape = [(0,0),(0,1),(0,2),(0,3)]},
+  -- T
+  Mino{ mcolor = yellow,
+        mshape = [(0,0),(1,0),(1,1),(2,0)]}
+  ]
+
+        -- --------------------
+-- ゲームの状態
+
+data State = State{
+  score  :: Int,
+  box    :: Box,
+  randomg :: StdGen
+  }
+type Time = Float
+  
+-- -----------------------------------------------------------
+-- ゲーム本物
+
+start :: StdGen -> Freer ()
+start gen = mainLoop initState
+ where
+  -- 新規の状態
+  initState = State{
+    score  = 0,
+    randomg = gen,
+    box    = emptyBox
+              }
+-- 繰り返す
+mainLoop :: State -> Freer ()
+  -- 終りの条件をチェック
+mainLoop st          | isFinished st = finish st
+  -- 行を消す
+mainLoop st@State{..} | Just fullLine <- findFullLine box = do
+  let st' = st{box = collapseLine fullLine box}
+  pause st' blank -- 変化した箱を表示のため
+  mainLoop st'
+  -- ミノを選択して落す
+mainLoop st = 
+  let (mino,randomg') = chooseMino (randomg st)
+      st' = st{randomg = randomg'}
+      horizDropPosition = (leftEdge + rightEdge) `div` 2
+  in lowerMino (horizDropPosition,topEdge) mino st'
+
+-- 終り
+finish :: State -> Freer ()
+finish st@State{..} = do
+  getKey st (translate 5 20 $ scale 0.05 0.05 $
+              text ("final score: " ++ show score))
+  start randomg
+
+-- 終りの条件
+-- 一番上の行は空行じゃなけらば終り
+isFinished :: State -> Bool
+isFinished State{..} = any (\i -> box ! (i,topEdge) /= emptyColor) boxLine
+
+-- ミノを選択する
+-- XXX 自分で書いて
+chooseMino :: StdGen -> (Mino,StdGen)
+chooseMino gen = let (a,b) = randomR (0,(length minos)-1) gen in 
+  (minos !! a ,b)
+  -- (minos !! (fst $ randomR (0,(length minos)-1) gen) , gen)
+
+
+
+-- ミノをどんどん落す
+lowerMino :: BoxPoint -> Mino -> State -> Freer ()
+lowerMino pt mino st@State{..} | canLower pt mino st = do
+  key <- getKey st (drawMino pt mino)
+  -- XXX キーを扱う 自分で
+  let (pt', mino'') = case key of
+        Just 'a' | let p = point_add (-1,0) pt,
+                  okPlace p mino st -> (p, mino)
+        Just 'd' | let r = point_add (1,0) pt,
+                  okPlace r mino st -> (r, mino)
+        Just 's' -> (lowerPtAsPossible pt mino st, mino)
+        Just 'w' | let mino' = rotateCCW mino,
+                  okPlace pt mino' st -> (pt, mino')
+        Just 'e' | let mino' = rotateCW mino,
+                  okPlace pt mino' st -> (pt, mino')
+        _      -> (lowerPt pt, mino)
+               
+  --pause st (scale 0.05 0.05 $ text $ "key " ++ show key)
+  lowerMino pt' mino'' st
+
+-- 到着した
+lowerMino pt Mino{..} st@State{..} = do
+  -- boxに置く
+  let box' = foldr (\mp -> M.insert (point_add_clap mp pt) mcolor)
+            box mshape
+  let st' = st{score=score+length mshape,box=box'}
+  pause st' blank -- 変化した箱を表示のため
+  mainLoop st'
+
+canLower :: BoxPoint -> Mino -> State -> Bool
+canLower pt mino st = okPlace (lowerPt pt) mino st
+
+lowerPtAsPossible :: BoxPoint -> Mino -> State -> BoxPoint 
+lowerPtAsPossible pt mino st =
+  if not (canLower pt mino st) then
+    pt
+  else
+    lowerPtAsPossible (lowerPt pt) mino st 
+
+
+-- ミノをｐｔに置くと大丈夫か 
+okPlace :: BoxPoint -> Mino -> State -> Bool
+okPlace pt Mino{mshape} State{box} =
+  all (\mpt -> let p@(_,j) = point_add mpt pt in
+        j > topEdge || (okPoint p && box ! p == emptyColor) ) mshape
+
+-- ------------------------------------------------------------------------
+-- 描く
+
+
+-- もっと綺麗に欲しい
+drawMino :: BoxPoint -> Mino -> Picture
+drawMino pt Mino{..} =
+  uncurry translate  (boxToWorldRel pt) $ color mcolor $ shapes
+ where
+  shapes = pictures $ map drawCell mshape
+
+drawCell :: BoxPoint -> Picture
+drawCell pt = polygon [(x-boxWH,y-boxWH),
+                    (x-boxWH,y+boxWH),
+                    (x+boxWH,y+boxWH),
+                    (x+boxWH,y-boxWH),
+                    (x-boxWH,y-boxWH)]
+  where (x,y) = boxToWorld pt
+
+
+drawEmptyBox :: Picture
+drawEmptyBox = line [(fst ul - boxWH, snd ul + boxWH),
+                (fst bl - boxWH, snd bl - boxWH),
+                (fst br + boxWH, snd br - boxWH),
+                (fst ur + boxWH, snd ur + boxWH)]
+  where ul = boxToWorld (leftEdge,topEdge)
+        ur = boxToWorld (rightEdge,topEdge)
+        bl = boxToWorld (leftEdge,bottomEdge)
+        br = boxToWorld (rightEdge,bottomEdge)
+
+drawBox :: Box -> Picture
+drawBox box =
+  pictures $
+  M.foldlWithKey' (\ps pt c ->
+                      if c == emptyColor then ps else
+                        (color c $ drawCell pt):ps) [drawEmptyBox] box
+
+-- ------------------------------------------------------------------------
+-- 僕の研究の一つ
+-- 僕の研を究知っていますか。 見付けりましょう。
+-- 興味があって、理解が欲しい場合は、2年後当研究室に来ましょう。
+-- (その前、質問があれば、是非)。
+
+data Freer a where
+  Pure  :: a -> Freer a
+  Effect :: Time -> Picture -> Req x -> (x -> Freer a) -> Freer a
+
+instance Functor Freer where
+  fmap f (Pure x) = Pure $ f x
+  fmap f (Effect t p r k) = Effect t p r (fmap f . k)
+
+instance Applicative Freer where
+  pure = Pure
+  Pure f <*> m = fmap f m
+  Effect t p r k <*> m = Effect t p r (\x -> k x <*> m)
+
+instance Monad Freer where
+  return = Pure
+  Pure x >>= k = k x
+  Effect t p r k' >>= k = Effect t p r (k' >>> k)
+
+-- 副作用を持つ関数を合成する (CBV 合成)
+(>>>) :: Monad m => (a -> m b) -> (b -> m c) -> (a -> m c)
+f >>> g = (>>= g) . f
+
+
+data Req a where
+  Pause  :: Req ()
+  KeyReq :: Req (Maybe Char)
+
+getKey :: State -> Picture -> Freer (Maybe Char)
+getKey  State{..} extrap = do
+  let pict = pictures [drawBox box, extrap]
+  Effect 0 pict KeyReq pure
+
+pause  :: State -> Picture -> Freer ()
+pause  State{..} extrap = do
+  let pict = pictures [drawBox box, extrap]
+  Effect 0 pict Pause pure
+  
+
+-- ------------------------------------------------------------------------
+
+timeout :: Float
+timeout = 0.3  --  秒
+
+type World = Freer ()
+
+drawWorld :: World -> Picture
+drawWorld (Effect _ p _ _) = translate 10 (-240) . scale 4 4 $ p
+drawWorld _                = blank
+
+frameHandler :: Time -> World -> World
+frameHandler _ (Effect t p Pause k)  | t > timeout = k ()
+frameHandler _ (Effect t p KeyReq k) | t > timeout = k Nothing
+frameHandler t (Effect t'  p r k) = Effect (t+t') p r k
+frameHandler _ w = w
+
+eventHandler :: Event -> World -> World
+eventHandler (EventKey (Char c) Up _ _) (Effect _ _ KeyReq k) = k (Just c)
+eventHandler _ w = w
+
+main = play (InWindow "Tetris" (500,500) (0,0))
+            white 5 (start (mkStdGen 1))
+            drawWorld
+            eventHandler
+            frameHandler
+
+
+-- ------------------------------------------------------------------------
+-- Glassの見せ掛け
+
+{-
+type Key = ()
+type Picture = ()
+text :: String -> Picture; text = undefined
+type Point = (Float,Float)
+type Path = [Point]
+line :: Path -> Picture; line = undefined
+translate :: Float -> Float -> Picture -> Picture; translate = undefined
+blank :: Picture; blank = undefined
+type Color = Int
+white = 0
+red  = 1
+color :: Color -> Picture -> Picture; color = undefined
+pictures :: [Picture] -> Picture
+pictures = undefined
+-}

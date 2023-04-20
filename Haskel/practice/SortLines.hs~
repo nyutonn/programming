@@ -1,0 +1,12 @@
+import Data.List (sort)
+
+main :: IO ()
+main = loop 0
+
+loop :: a -> IO ()
+loop a = do
+  s <- getLine
+  if null s then do
+    print a
+  else 
+    loop (sort a + read s)

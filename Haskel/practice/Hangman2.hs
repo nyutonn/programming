@@ -1,0 +1,89 @@
+-- String型に変えちゃった版
+import Data.List (sort)
+data GameState = GameState { secret :: String, tried :: [Char], life :: Int }
+  deriving Show 
+
+data GameStatus = Win | Lose | OnGoing 
+  deriving Show
+
+main :: IO () 
+main = do 
+  state <- initState 
+  loop state
+
+-- ゲームループ
+loop :: GameState -> IO () 
+loop state = 
+   case checkStatus state of 
+      Win  -> renderWin state
+      Lose -> renderLose state
+      OnGoing -> do
+         renderState state
+         s <- readUserInput
+         loop (updateState s state)
+
+-- 最初の状態を返す．とりあえずは「秘密の単語」は決め打ちでよい．
+initState :: IO GameState
+initState = return $ GameState {secret = "yuton", tried = [], life = 10}
+  
+
+-- 勝ちか（「秘密の単語」が開示された状態になる），負けか（「残り挑戦回数」が付きる）か，継続中（その何れでもない）かを判定する
+checkStatus :: GameState -> GameStatus
+checkStatus state = if judge secret state == "win" then return Win
+                    else if judge secret state == "lose" then return Lose
+                    else return OnGoing
+
+judge :: String -> GameState -> String
+judge [] state = "win"
+judge (a:x) state =
+  if life == 0 then "lose"
+  else if a `elem` tried then judge x state
+  else return "ongoing"
+
+-- 解答者側の勝利であるという情報を表示する
+renderWin :: GameState -> IO () 
+renderWin state = do
+  putStrLn "You win!!"
+  putStrLn $ "The answer is " ++ secret ++ "."
+  putStrLn $ "Your rest life is " ++ life ++ "."
+  
+-- 解答者側の敗北であるという情報を表示する
+renderLose :: GameState -> IO () 
+renderLose state = do
+  putStrLn "You lose..."
+  putStrLn $ "The answer is " ++  secret ++ "."
+
+-- GameStateを適切に表示する。残りライフと開いたところを表示する
+renderState :: GameState -> IO ()
+renderState state = 
+
+-- 解答者の入力を読みこむ．
+-- 一行読んで，先頭の文字を使ったのでよい（getLineを使う？）
+-- 空行だったら？あるいは先頭の文字が数字等英語アルファベットでなかったら？
+readUserInput :: IO String 
+readUserInput = do
+  putStrLn "Write your answer."
+  new_name <- getLine
+  when (null new_name) do
+    readUserInput
+    return ()
+  return new_name
+  
+-- when関数の実装
+when :: Bool -> IO () -> IO ()
+when b m = if b then m else return ()
+
+-- 解答者の入力に応じて，現在の状態を更新する．
+updateState :: String -> GameState -> IO () -> GameState
+updateState [] state = return state
+updateState (a:x) state = do
+  state { life = life - 1 }
+  if a `elem` tried then do
+    state { tried = sort tried }
+    return state
+  else do
+    state { tried = tried ++ [a] }
+    updateState x state
+  
+
+

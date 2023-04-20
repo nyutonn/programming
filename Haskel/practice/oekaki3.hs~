@@ -1,0 +1,16 @@
+import Graphics.Gloss
+
+main :: IO () 
+main = display (InWindow "Circle" (600, 500) (120,100)) white picture
+
+picture :: Picture
+picture = pictures [
+  translate 0 100 $ color red $ circleSolid 10,
+  translate 0 20 $ color blue $ circle 110,
+  translate 15 125 $ scale 1 1.5 $ color black $ circle 15,
+  translate (-15) 125 $ scale 1 1.5 $ color black $ circle 15,
+  translate 8 120 $ color black $ circleSolid 7,
+  translate (-8) 120 $ color black $ circleSolid 7,
+  line [(0,90), (0,70)]
+  
+                   ]
