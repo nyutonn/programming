@@ -1,7 +1,0 @@
-digraph {
-	start [color=red shape=square]
-	start -> a
-	a -> b [label="+1"]
-	b -> end
-	end [color=blue shape=red]
-}
