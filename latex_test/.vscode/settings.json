@@ -1,0 +1,8 @@
+{
+    "cloudlatex.enabled": true,
+    "cloudlatex.outDir": "out",
+    "cloudlatex.projectId": 688284,
+
+    "latex-workshop.latex.autoBuild.run": "never",
+    "latex-workshop.latex.outDir": "out"
+}
